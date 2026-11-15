@@ -17,7 +17,13 @@ func (s *stdioCloser) Close() error {
 	if s.stdin != nil {
 		s.stdin.Close()
 	}
+	// Reap the whole process group before the direct child: package runners
+	// fork a chain (npm exec → sh -c → node) and killing only the direct child
+	// orphans the grandchildren to PID 1, where a full Node runtime stays
+	// resident forever. Each spawned server got its own group in
+	// NewStdioClient, so a negative-pid kill reaches every descendant.
 	if s.cmd != nil && s.cmd.Process != nil {
+		killProcessGroup(s.cmd.Process.Pid)
 		_ = s.cmd.Process.Kill()
 		_ = s.cmd.Wait()
 	}
@@ -31,6 +37,7 @@ func (s *stdioCloser) Close() error {
 // applied on top of the parent process environment; pass nil for none.
 func NewStdioClient(ctx context.Context, server, command string, env map[string]string, args ...string) (*Client, error) {
 	cmd := exec.Command(command, args...)
+	setProcessGroup(cmd)
 	if len(env) > 0 {
 		cmd.Env = os.Environ()
 		for k, v := range env {
